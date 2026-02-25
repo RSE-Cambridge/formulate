@@ -1,0 +1,60 @@
+#:include "formulate_macros.fypp"
+
+program ftl_string_test
+  use formulate
+  use ftlStringModule
+
+  implicit none
+
+  ! Extend Formulate's 'show' interface
+  interface show
+    procedure :: show_ftl_str
+  end interface
+
+  ! Extend Formulate's 'arbitrary' interface
+  interface arbitrary
+    procedure :: arbitrary_ftl_str
+  end interface
+
+  @:check(prop_split_join_replace)
+  @:check(prop_split_join)
+
+contains
+
+  ! Function to show FTL strings
+  impure elemental function show_ftl_str(ftl_str) result(txt)
+    type(ftlString), intent(in) :: ftl_str
+    type(text_t) :: txt
+    txt = show(raw(ftl_str))
+  end function
+
+  ! Routine to generate simple FTL strings
+  impure elemental subroutine arbitrary_ftl_str(ftl_str, domain, &
+                                                min_len, max_len)
+    type(ftlString), intent(out) :: ftl_str
+    character(*), intent(in), optional :: domain
+    integer, intent(in), optional :: min_len, max_len
+    character(:), allocatable :: str
+    call arbitrary_str(str, domain, min_len, max_len)
+    ftl_str = str
+  end subroutine
+
+  ! A simple property relating split, join, and replace
+  logical function prop_split_join_replace()
+    type(ftlString) :: str, old, new
+    integer :: n
+    @:for_all(str)
+    @:for_all(old)
+    @:for_all(new)
+    prop_split_join_replace = &
+      str%replace(old, new, count=n) == new%join(str%split(old, maxsplit=n))
+  end function
+
+  ! A simple property relating split and join
+  logical function prop_split_join()
+    type(ftlString) :: str, sep
+    @:for_all(str)
+    @:for_all(sep)
+    prop_split_join = sep%join(str%split(sep)) == str
+  end function
+end program

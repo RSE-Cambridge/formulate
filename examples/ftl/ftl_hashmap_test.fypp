@@ -1,0 +1,177 @@
+#:include "formulate_macros.fypp"
+
+program ftl_hashmap_test
+  use formulate
+  use ftlStringModule
+  use ftlHashMapStringIntModule
+
+  implicit none
+
+  ! Hash map operation identifiers
+  integer, parameter :: OP_SET    = 0, &
+                        OP_ERASE  = 1, &
+                        OP_COPY   = 2, &
+                        OP_REHASH = 3, &
+                        OP_NEW    = 4, &
+                        OP_CLEAR  = 5
+
+  ! Type representing a hashmap operation
+  type :: hashmap_op_t
+    ! Unique id denoting a hashmap operation
+    integer :: id
+    ! Key and value possibly used by the operation
+    type(ftlString) :: key
+    integer :: val = 0
+    ! Number of buckets used by the operation
+    integer :: num_buckets = 0
+  end type
+
+  ! Extend Formulate's 'show' interface
+  interface show
+    procedure :: show_hashmap_op
+  end interface
+
+  ! Extend Formulate's 'arbitrary' interface
+  interface arbitrary
+    procedure :: arbitrary_hashmap_op
+  end interface
+
+  @:check(prop_consistent)
+
+contains
+
+  ! Show function for hashmap operations
+  impure elemental function show_hashmap_op(op) result(txt)
+    type(hashmap_op_t), intent(in) :: op
+    type(text_t) :: txt
+    txt = text("hashmap_op_t(")
+    select case (op%id)
+      case (OP_NEW)
+        txt = txt // text("id=OP_NEW,num_buckets=") // show(op%num_buckets)
+      case (OP_SET)
+        txt = txt // text("id=OP_SET,key=") // show(raw(op%key)) &
+                  // text(",val=")          // show(op%val)
+      case (OP_ERASE)
+        txt = txt // text("id=OP_ERASE,key=") // show(raw(op%key))
+      case (OP_CLEAR)
+        txt = txt // text("id=OP_CLEAR")
+      case (OP_COPY)
+        txt = txt // text("id=OP_COPY")
+      case (OP_REHASH)
+        txt = txt // text("id=OP_REHASH,num_buckets=") // show(op%num_buckets)
+      case default
+        stop "show_hashmap_op: unknown operation id"
+    end select
+    txt = txt // text(")")
+  end function
+
+  ! Arbitrary function for keys
+  impure elemental subroutine arbitrary_key(key)
+    type(ftlString), intent(out) :: key
+    character(:), allocatable :: str
+    call arbitrary_str(str, domain="abc")
+    key = str
+  end subroutine
+
+  ! Arbitrary function for hashmap operations
+  impure elemental subroutine arbitrary_hashmap_op(op)
+    type(hashmap_op_t), intent(out) :: op
+    real :: r
+    call arbitrary(r, min_val=0.0, max_val=1.0)
+    if (r < 0.7) then
+      op%id = 0
+    else if (r < 0.9) then
+      op%id = 1
+    else if ( r < 0.9) then
+      call arbitrary(op%id, min_val=2, max_val=3)
+    else
+      call arbitrary(op%id, min_val=4, max_val=5)
+    endif
+    call arbitrary_key(op%key)
+    call arbitrary(op%val)
+    call arbitrary(op%num_buckets, min_val=1)
+  end subroutine
+
+  ! Convert array of hashmap operations to a hashmap
+  function perform(ops) result(map)
+    type(hashmap_op_t), intent(in) :: ops(:)
+    type(ftlHashMapStringInt) :: map, map_copy
+    integer :: i
+    call map%new(5)
+    do i = 1, size(ops)
+      associate (op => ops(i))
+        select case (op%id)
+          case (OP_SET)
+            call map%set(op%key, op%val)
+          case (OP_ERASE)
+            call map%erase(op%key)
+          case (OP_COPY)
+            map_copy = map
+            map = map_copy
+          case (OP_REHASH)
+            call map%rehash(op%num_buckets)
+          case (OP_NEW)
+            call map%new(op%num_buckets)
+          case (OP_CLEAR)
+            call map%clear()
+        end select
+      end associate
+    end do
+  end function
+
+  ! Determine value of key from an array of hashmap operations
+  subroutine golden_get(ops, key, val, found)
+    type(hashmap_op_t), intent(in) :: ops(:)
+    type(ftlString), intent(in) :: key
+    integer, intent(out) :: val
+    logical, intent(out) :: found
+    integer :: i
+    do i = size(ops), 1, -1
+      associate (op => ops(i))
+        if (op%id == OP_SET .and. op%key == key) then
+          val = op%val
+          found = .true.
+          return
+        else if (op%id == OP_ERASE .and. op%key == key) then
+          found = .false.
+          return
+        else if (op%id == OP_CLEAR .or. op%id == OP_NEW) then
+          found = .false.
+          return
+        end if
+      end associate
+    end do
+  end subroutine
+
+  ! Check that a hashmap is in agreement with an array of hashmap operations
+  logical function agree(map, ops)
+    type(hashmap_op_t), intent(in) :: ops(:)
+    type(ftlHashMapStringInt), intent(in) :: map
+    type(ftlString) :: key
+    integer :: i, val
+    logical :: found
+    ! Iterate over all keys mentioned in the array of operations
+    do i = 1, size(ops)
+      if (ops(i)%id == OP_SET .or. ops(i)%id == OP_ERASE) then
+        key = ops(i)%key
+        call golden_get(ops, key, val, found)
+        if (found .neqv. map%has(key)) then
+          agree = .false.
+          return
+        end if
+        if (found .and. map%get(key) /= val) then
+          agree = .false.
+          return
+        end if
+      end if
+    end do
+    agree = .true.
+  end function
+
+  ! Property that an array of hashmap operations produces a correct hashmap
+  logical function prop_consistent()
+    type(hashmap_op_t), allocatable :: ops(:)
+    @:for_all_array(rank_1, ops)
+    prop_consistent = agree(perform(ops), ops)
+  end function
+end program

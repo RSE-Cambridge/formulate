@@ -1,0 +1,109 @@
+#! SPDX-License-Identifier: MIT
+#:mute
+
+#:if not defined("_FORMULATE_MACROS_FYPP_")
+#:set _FORMULATE_MACROS_FYPP_
+
+#! Helper macros
+#! =============
+
+#! Macro to expand arguments to text
+#:def expand_args(*args, **kwargs)
+$:','.join(args+list(f'{k}={v}' for k,v in kwargs.items()))
+#:enddef
+
+#! Checker macro
+#! =============
+
+#! Macro to check given property
+#:def check(prop, *args, **kwargs)
+  call check(${expand_args(prop, *args, **kwargs)}$, name=${f'"{prop}"'}$)
+#:enddef
+
+#! Reporting counterexamples
+#! =========================
+
+#! Macro for showing arbitrary rank/shape arrays (including rank 0)
+#:def show_array(x)
+  show_text_array([show(${x}$)], shape(${x}$))
+#:enddef
+
+#! Macro to request that 'x' be displayed when a counterexample is found
+#:def record(x)
+  associate (arr__ => ${x}$)
+    call record_val(${show_array("arr__")}$, name=${f'"{x}"'}$)
+  end associate
+#:enddef
+
+#! Array allocation
+#! ================
+
+#! Allocate 'rank_n' array 'x' with shape 's'
+#! The 'rank_n' argument must be the form "rank_<n>" where "<n>" is an integer
+#:def allocate(rank_n, x, s)
+#:if rank_n.startswith("rank_")
+  #:set n = int(rank_n[5:])
+#:else
+  #:stop f'allocate() macro: ${rank_n}$ is not of the form "rank_<n>"'
+#:endif
+associate(sh__ => ${s}$)
+  allocate(${x}$(${','.join(f"sh__({dim})" for dim in range(1,n+1))}$))
+end associate
+#:enddef
+
+#! Allocate 'rank_n' array 'x' with arbitrary shape
+#:def arbitrary_allocate(rank_n, x, *args, **kwargs)
+  block
+    integer :: s__(rank(${x}$))
+    call arbitrary_shape(${expand_args("s__", *args, **kwargs)}$)
+    @:allocate(${rank_n}$, ${x}$, s__)
+  end block
+#:enddef
+
+#! Arbitrary arrays
+#! ================
+
+#! Macro to generate arbitrary array 'x' using a custom generator 'gen'
+#:def arbitrary_custom_array(rank_n, x, gen, *args, **kwargs)
+  @:arbitrary_allocate(${rank_n}$, ${x}$)
+  call ${gen}$(${expand_args(x, *args, **kwargs)}$)
+#:enddef
+
+#! Macro to generate arbitrary array 'x'
+#:def arbitrary_array(rank_n, x, *args, **kwargs)
+$:arbitrary_custom_array(rank_n, x, "arbitrary", *args, **kwargs)
+#:enddef
+
+#! Universal quantifiers
+#! =====================
+
+#! Macro to quantify over 'x' using a custom generator 'gen'
+#:def for_all_custom(x, gen, *args, **kwargs)
+  call ${gen}$(${expand_args(x, *args, **kwargs)}$)
+  @:record(${x}$)
+#:enddef
+
+#! Macro to quantify over 'x'
+#:def for_all(x, *args, **kwargs)
+$:for_all_custom(x, "arbitrary", *args, **kwargs)
+#:enddef
+
+#! Macro to quantify over 'rank_n' arrays 'x' using a custom generator 'gen'
+#:def for_all_custom_array(rank_n, x, gen, *args, **kwargs)
+  @:arbitrary_allocate(${rank_n}$, ${x}$)
+  $:for_all_custom(x, gen, *args, **kwargs)
+#:enddef
+
+#! Macro to quantify over 'rank_n' arrays 'x'
+#:def for_all_array(rank_n, x, *args, **kwargs)
+$:for_all_custom_array(rank_n, x, "arbitrary", *args, **kwargs)
+#:enddef
+
+#! Quantifier for unallocated strings
+#:def for_all_string(x, *args, **kwargs)
+$:for_all_custom(x, "arbitrary_str", *args, **kwargs)
+#:enddef
+
+#:endif
+
+#:endmute

@@ -1,0 +1,47 @@
+! SPDX-License-Identifier: MIT
+
+#:include "formulate_macros.fypp"
+
+program reverse
+  use formulate
+
+  implicit none
+
+  ! Check three properties about a function for reversing strings
+  @:check(prop_rev_rev)
+  @:check(prop_rev_append)
+  @:check(prop_rev_single)
+
+contains
+
+  ! A function to reverse a string, to be tested
+  function rev(xs) result (ys)
+    character(*), intent(in) :: xs
+    character(:), allocatable :: ys
+    integer :: i, j
+    allocate(character(len(xs)) :: ys)
+    do i = 1, len(xs)
+      j = len(xs)+1-i
+      ys(j:j) = xs(i:i)
+    end do
+  end function
+
+  logical function prop_rev_rev()
+    character(:), allocatable :: xs
+    @:for_all_string(xs)
+    prop_rev_rev = rev(rev(xs)) == xs
+  end function
+
+  logical function prop_rev_append()
+    character(:), allocatable :: xs, ys
+    @:for_all_string(xs)
+    @:for_all_string(ys)
+    prop_rev_append = rev(xs // ys) == rev(ys) // rev(xs)
+  end function
+
+  logical function prop_rev_single()
+    character :: xs
+    @:for_all(xs)
+    prop_rev_single = rev(xs) == xs
+  end function
+end program

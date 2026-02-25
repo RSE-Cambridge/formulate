@@ -1,0 +1,125 @@
+! SPDX-License-Identifier: MIT
+
+#:include "formulate_macros.fypp"
+
+program reverse
+  use formulate
+
+  implicit none
+
+  @:check(prop_add_assoc)
+  @:check(prop_append_size)
+  @:check(prop_concat_len)
+  @:check(prop_transpose)
+  @:check(prop_transpose_size)
+  @:check(prop_abs)
+  @:check(prop_matmul_assoc)
+  @:check(prop_index)
+
+contains
+
+  ! Associativity of integer addition
+  logical function prop_add_assoc()
+    real :: x, y, z
+    @:for_all(x)
+    @:for_all(y)
+    @:for_all(z)
+    prop_add_assoc = (x + y) + z == x + (y + z)
+    @:record((x + y) + z)
+    @:record(x + (y + z))
+  end function
+
+  ! Simple property relating array size and concatentation
+  logical function prop_append_size()
+    integer, allocatable :: xs(:), ys(:)
+    integer :: n, m
+    call arbitrary(n, min_val=0)
+    call arbitrary(n, min_val=0)
+    allocate(xs(n), ys(m))
+    @:for_all(xs)
+    @:for_all(ys)
+    prop_append_size = size([xs, ys]) == size(xs) + size(ys)
+  end function
+
+  ! Simple property relating string length and concatentation
+  logical function prop_concat_len()
+    character(:), allocatable :: s1, s2
+    @:for_all_string(s1)
+    @:for_all_string(s2)
+    prop_concat_len = len(s1 // s2) == len(s1) + len(s2)
+  end function
+
+  ! Transpose is its own inverse (variant 0)
+  logical function prop_transpose_0()
+    integer, allocatable :: arr(:,:)
+    integer :: n, m
+    call arbitrary(n, min_val=0)
+    call arbitrary(m, min_val=0)
+    allocate(arr(n, m))
+    @:for_all(arr)
+    prop_transpose_0 = all(transpose(transpose(arr)) == arr)
+  end function
+
+  ! Transpose is its own inverse (variant 1)
+  logical function prop_transpose_1()
+    integer, allocatable :: arr(:,:)
+    integer :: sh(2)
+    call arbitrary_shape(sh)
+    allocate(arr(sh(1),sh(2)))
+    @:for_all(arr)
+    prop_transpose_1 = all(transpose(transpose(arr)) == arr)
+  end function
+
+  ! Transpose is its own inverse (variant 3)
+  logical function prop_transpose_2()
+    integer, allocatable :: arr(:,:)
+    @:arbitrary_allocate(rank_2, arr)
+    @:for_all(arr)
+    prop_transpose_2 = all(transpose(transpose(arr)) == arr)
+  end function
+
+  ! Transpose is its own inverse (variant 4)
+  logical function prop_transpose()
+    integer, allocatable :: arr(:,:)
+    @:for_all_array(rank_2, arr)
+    prop_transpose = all(transpose(transpose(arr)) == arr)
+  end function
+
+  ! Transpose permutes its dimension sizes
+  logical function prop_transpose_size()
+    integer, allocatable :: m(:,:)
+    @:for_all_array(rank_2, m)
+    prop_transpose_size = all(cshift(shape(m), 1) == shape(transpose(m)))
+  end function
+
+  ! The abs function has no effect on non-negative integers
+  logical function prop_abs()
+    integer :: x
+    @:for_all(x, min_val=1)
+    prop_abs = abs(x) == x
+  end function
+
+  ! Matrix multiplication is associative
+  logical function prop_matmul_assoc()
+    integer, allocatable :: a(:,:), b(:,:), c(:,:)
+    integer :: n
+    call arbitrary(n, min_val=0)
+    allocate(a(n,n), b(n,n), c(n,n))
+    @:for_all(a)
+    @:for_all(b)
+    @:for_all(c)
+    prop_matmul_assoc = all(matmul(a, matmul(b, c)) == matmul(matmul(a, b), c))
+  end function
+
+  ! A simple property about Fortran's 'index' intrinsic
+  logical function prop_index()
+     character(:), allocatable :: str, substr
+     integer :: i
+     @:for_all_string(str, domain="abc")
+     @:for_all_string(substr, domain="abc", max_len=3)
+     i = index(str, substr)
+     call classify("Empty", len(substr) == 0)
+     call classify("Found", len(substr) > 0 .and. i > 0)
+     prop_index = implies(i /= 0, str(i:i+len(substr)-1) == substr)
+  end function
+end program

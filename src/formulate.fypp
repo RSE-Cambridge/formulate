@@ -1,0 +1,987 @@
+! SPDX-License-Identifier: MIT
+
+#:include "formulate_macros.fypp"
+
+module formulate
+  use iso_fortran_env
+
+  implicit none
+
+  ! Types
+  ! =====
+
+  ! Data type capable of holding all thread-private state
+  type, private :: state_t
+    ! Number of quantified variables currently in use
+    integer :: num_quantified_vars
+    ! Array of quantified variables
+    type(quantified_var_t), allocatable :: quantified_vars(:)
+    ! This bounds integers being generated and usually grows over time
+    integer(kind=int64) :: int_size
+    ! This bounds reals being generated and usually grows over time
+    real(kind=real128) :: real_size
+    ! Verbose mode (values are displayed as they are generated)
+    logical :: verbose_mode
+    ! Discard the current test?
+    logical :: discard_test
+    ! Classification histogram
+    type(histogram_entry_t), allocatable :: histogram(:)
+    ! Number of entries in the histogram
+    integer :: num_histogram_entries
+
+    contains
+
+    procedure :: init => state_init
+    procedure :: reset => state_reset
+    procedure :: add_quantified_var => state_add_quantified_var
+    procedure :: discard => state_discard
+    procedure :: classify => state_classify
+  end type
+
+  ! Info about quantifed variables
+  type, private :: quantified_var_t
+    ! Variable name
+    character(:), allocatable :: name
+    ! String holding a textual representation of the variable's value
+    character(:), allocatable :: str
+  end type
+
+  ! A simple wrapper around Fortran's string type, used for displaying
+  ! test cases. Fortran's string type is not sufficient because we'd like
+  ! elemental functions that produce text, which requires a wrapper type.
+  type, public :: text_t
+    ! Contents
+    character(:), allocatable, private :: contents
+    ! The number of characters in the text,
+    ! which may be less than 'len(contents)'
+    integer, private :: n = 0
+
+  contains
+
+    procedure :: init => text_init
+    procedure :: append_str => text_append_str
+    procedure :: append_text => text_append_text
+    generic   :: append => append_str, append_text
+    procedure :: to_string => text_to_string
+  end type
+
+  ! Histogram entry for classification of test cases
+  type, private :: histogram_entry_t
+    ! Classifier name
+    character(:), allocatable :: name
+    ! Number of occurences of this classification
+    integer :: count
+  end type
+
+  ! Thread-private state
+  ! ====================
+
+  !$omp threadprivate(state)
+  type(state_t), private :: state
+
+  ! Function interfaces
+  ! ===================
+
+  ! Property to check
+  abstract interface
+    function property_fun_t() result(ok)
+      logical :: ok
+    end function
+  end interface
+
+  ! Growth function to determine the integer size bound from the number
+  ! of tests performed so far
+  abstract interface
+    function int_size_fun_t(num_tests) result(sz)
+      use iso_fortran_env
+      integer, intent(in) :: num_tests
+      integer(kind=int64) :: sz
+    end function
+  end interface
+
+  ! Growth function to determine the real size bound from the number
+  ! of tests performed so far
+  abstract interface
+    function real_size_fun_t(num_tests) result(sz)
+      use iso_fortran_env
+      integer, intent(in) :: num_tests
+      real(kind=real128) :: sz
+    end function
+  end interface
+
+  ! Overloaded interfaces
+  ! =====================
+
+  ! Generate random values in a range
+  interface between
+    procedure :: between_int8, between_int16, between_int32, between_int64, &
+                 between_real32, between_real64, between_real128
+  end interface
+
+  ! Populate structures with random data
+  interface arbitrary
+    procedure :: arbitrary_int8, arbitrary_int16, arbitrary_int32, &
+                 arbitrary_int64, arbitrary_real32, arbitrary_real64, &
+                 arbitrary_real128, arbitrary_char, arbitrary_logical, &
+                 arbitrary_complex_real32, arbitrary_complex_real64, &
+                 arbitrary_complex_real128
+  end interface
+
+  ! Show generated values (i.e. convert them to strings)
+  interface show
+    procedure :: show_int8, show_int16, show_int32, show_int64, &
+                 show_real32, show_real64, show_real128, show_str, &
+                 show_logical, show_complex_real32, show_complex_real64, &
+                 show_complex_real128
+  end interface
+
+  ! Append operator for text
+  interface operator(//)
+    procedure :: text_append_text_fun, &
+                 text_append_str_fun, &
+                 str_append_text_fun
+  end interface
+
+  ! Assignment operator for text
+  interface assignment(=)
+    procedure :: text_assign_from_str
+  end interface
+
+  ! Test closeness of real values
+  interface near_equal
+    procedure :: near_equal_real32, near_equal_real64, &
+                 near_equal_real128
+  end interface
+
+  ! Interface
+  ! =========
+
+  private
+  public :: get_int_size
+  public :: get_real_size
+  public :: record_val
+  public :: implies
+  public :: operator(//)
+  public :: assignment(=)
+  public :: near_equal
+  public :: between
+  public :: arbitrary 
+  public :: arbitrary_shape
+  public :: arbitrary_str
+  public :: show
+  public :: show_text_array
+  public :: check
+  public :: discard
+  public :: classify
+  public :: text
+
+contains
+
+  ! Methods for state_t
+  ! ===================
+
+  ! Method for state initialisation
+  subroutine state_init(self)
+    class(state_t), intent(inout) :: self
+
+    ! Initialise per-test state
+    call self%reset()
+
+    ! Initialise state shared between tests
+    self%num_histogram_entries = 0
+    if (.not. allocated(self%histogram)) then
+      allocate(self%histogram(32))
+    end if
+   end subroutine
+
+  ! Method to initialise per-test state
+  subroutine state_reset(self)
+    ! Parameters
+    class(state_t), intent(inout) :: self
+
+    ! Quantified variables
+    self%num_quantified_vars = 0
+    if (.not. allocated(self%quantified_vars)) then
+      allocate(self%quantified_vars(256))
+    end if
+
+    self%verbose_mode = .false.
+    self%discard_test = .false.
+   end subroutine
+
+  ! Method to add a quantified variable to the state
+  subroutine state_add_quantified_var(self, str, name)
+    ! Parameters
+    class(state_t), intent(inout) :: self
+    character(*), intent(in) :: str
+    character(*), intent(in), optional :: name
+
+    ! Locals
+    integer :: n
+    character(64) :: tmp
+    type(quantified_var_t), allocatable :: qvs(:)
+
+    ! Extend array size if needed
+    n = self%num_quantified_vars
+    if (n == size(self%quantified_vars)) then
+      allocate(qvs(n*2))
+      qvs(1:n) = self%quantified_vars(1:n)
+      call move_alloc(qvs, self%quantified_vars)
+    end if
+
+    ! Add variable
+    if (present(name)) then
+      self%quantified_vars(n+1)%name = name
+    else
+      write(tmp, "('for_all_',i0)") (n+1)
+      self%quantified_vars(n+1)%name = trim(tmp)
+    end if
+    self%quantified_vars(n+1)%str = str
+    self%num_quantified_vars = n+1
+
+    ! Verbose mode
+    if (self%verbose_mode) then
+      write(*, "(a,' = ',a)") self%quantified_vars(n+1)%name, &
+                              self%quantified_vars(n+1)%str
+    end if
+  end subroutine
+
+  ! Method to discard the current test case (if condition holds)
+  subroutine state_discard(self, cond)
+    class(state_t), intent(inout) :: self
+    logical, intent(in), optional :: cond
+    if ((.not. present(cond)) .or. (present(cond) .and. cond)) then
+      state%discard_test = .true.
+    end if
+  end subroutine
+
+  ! Method to classify the current test case (if condition holds)
+  subroutine state_classify(self, str, cond)
+    ! Parameters
+    class(state_t), intent(inout) :: self
+    character(*), intent(in) :: str
+    logical, intent(in), optional :: cond
+
+    ! Locals
+    integer :: i, n
+    type(histogram_entry_t), allocatable :: entries(:)
+
+    if ((.not. present(cond)) .or. (present(cond) .and. cond)) then
+      n = self%num_histogram_entries
+
+      ! Increment count if entry already present
+      do i = 1, n
+        if (self%histogram(i)%name == str) then
+          self%histogram(i)%count = self%histogram(i)%count + 1
+          return
+        end if
+      end do
+
+      ! Extend histogram size if needed
+      if (n == size(self%histogram)) then
+        allocate(entries(n*2))
+        entries(1:n) = self%histogram(1:n)
+        call move_alloc(entries, self%histogram)
+      end if
+
+      ! Add new entry
+      self%histogram(n+1)%name = str
+      self%histogram(n+1)%count = 1
+      self%num_histogram_entries = n+1
+    end if
+  end subroutine
+
+  ! User-exposed interface to the state
+  ! ===================================
+
+  ! Report the given value (rendered as text) when a counterexample is found
+  subroutine record_val(val_txt, name)
+    type(text_t), intent(in) :: val_txt
+    character(*), intent(in), optional :: name
+    call state%add_quantified_var(val_txt%to_string(), name)
+  end subroutine
+
+  ! Get the current integer size
+  function get_int_size() result (sz)
+    integer(kind=int64) :: sz
+    sz = state%int_size
+  end function
+
+  ! Get the current real size
+  function get_real_size() result (sz)
+    real(kind=real128) :: sz
+    sz = state%real_size
+  end function
+
+  ! Default function to compute the integer size bound from the number of
+  ! tests performed so far
+  function int_size_default(num_tests) result(sz)
+    integer, intent(in) :: num_tests
+    integer(kind=int64) :: sz
+    sz = (num_tests+3)/2
+  end function
+
+  ! Default function to compute the integer size bound from the number of
+  ! tests performed so far
+  function real_size_default(num_tests) result(sz)
+    integer, intent(in) :: num_tests
+    real(kind=real128) :: sz
+    sz = num_tests
+  end function
+
+  ! Methods and functions for text_t
+  ! ================================
+
+  ! Intialise to the empty string
+  pure subroutine text_init(self, initial_capacity)
+    class(text_t), intent(inout) :: self
+    integer, intent(in), optional :: initial_capacity
+    allocate(character(default(64, initial_capacity)) :: self%contents)
+    self%n = 0
+  end subroutine
+
+  ! Append the given string to the end of the text
+  pure subroutine text_append_str(self, str)
+    class(text_t), intent(inout) :: self
+    character(*), intent(in) :: str
+    ! Initialise text if needed
+    if (.not. allocated(self%contents)) then
+      call self%init()
+    end if
+    ! Repeatedly double the capacity until it's big enough
+    do while (self%n + len(str) > len(self%contents))
+      self%contents = self%contents // self%contents
+    end do
+    self%contents(self%n + 1 : self%n + len(str)) = str
+    self%n = self%n + len(str)
+  end subroutine
+
+  ! Append the given text to the end of the text
+  pure subroutine text_append_text(self, txt)
+    class(text_t), intent(inout) :: self
+    type(text_t), intent(in) :: txt
+    call self%append(txt%to_string())
+  end subroutine
+
+  ! Convert text to a string
+  pure function text_to_string(self) result(str)
+    class(text_t), intent(in) :: self
+    character(:), allocatable :: str
+    str = self%contents(1 : self%n)
+  end function
+
+  ! Convert a string to text
+  pure function text(str) result(txt)
+    character(*), intent(in) :: str
+    type(text_t) :: txt
+    call txt%append(str)
+  end function
+
+  subroutine text_assign_from_str(lhs, rhs)
+     type(text_t), intent(inout) :: lhs
+     character(*), intent(in) :: rhs
+     lhs = text(rhs)
+  end subroutine
+
+  ! Function to append two given texts to produce a new text
+  pure function text_append_text_fun(x, y) result (z)
+    type(text_t), intent(in) :: x, y
+    type(text_t) :: z
+    call z%append(x)
+    call z%append(y)
+  end function
+
+  ! Function to append text and a string to produce a new text
+  pure function text_append_str_fun(x, y) result (z)
+    type(text_t), intent(in) :: x
+    character(*), intent(in) :: y
+    type(text_t) :: z
+    call z%append(x)
+    call z%append(y)
+  end function
+
+  ! Function to append text and a string to produce a new text
+  pure function str_append_text_fun(x, y) result (z)
+    character(*), intent(in) :: x
+    type(text_t), intent(in) :: y
+    type(text_t) :: z
+    call z%append(x)
+    call z%append(y)
+  end function
+
+  ! Helper function to choose between a present value and a default value
+  pure integer function default(d, x)
+    integer, intent(in) :: d
+    integer, intent(in), optional :: x
+    if (present(x)) then
+      default = x
+    else
+      default = d
+    end if
+  end function
+
+  ! Logical implication
+  pure logical function implies(x, y)
+    logical, intent(in) :: x, y
+    implies = (.not. x) .or. y
+  end function
+
+  ! Discard current test (if condition holds)
+  subroutine discard(cond)
+    logical, intent(in), optional :: cond
+    call state%discard(cond)
+  end subroutine
+
+  ! Classify current test (if condition holds)
+  subroutine classify(str, cond)
+    character(*), intent(in) :: str
+    logical, intent(in), optional :: cond
+    call state%classify(str, cond)
+  end subroutine
+
+  ! Random number generation
+  ! ========================
+
+  ! Rroutines for generating a random int in range [min_val, max_val]
+  #:for kind in ["int8", "int16", "int32", "int64"]
+  impure elemental subroutine between_${kind}$(x, min_val, max_val)
+    ! Parameters
+    integer(kind=${kind}$), intent(out) :: x
+    integer(kind=${kind}$), intent(in) :: min_val, max_val
+
+    ! Locals
+    real(kind=real128) :: r, min_val_real, max_val_real
+
+    ! Random number generation and truncation
+    if (max_val < min_val) then
+      x = min_val
+    else
+      call random_number(r)
+      min_val_real = real(min_val, kind=real128)
+      max_val_real = real(max_val, kind=real128)
+      x = min_val + floor((max_val_real+1.0-min_val_real)*r, kind=${kind}$)
+    end if
+  end subroutine
+  #:endfor
+
+  ! Routines for generating a random real in range [min_val, max_val)
+  #:for kind in ["real32", "real64", "real128"]
+  impure elemental subroutine between_${kind}$(x, min_val, max_val)
+    ! Parameters
+    real(kind=${kind}$), intent(out) :: x
+    real(kind=${kind}$), intent(in) :: min_val, max_val
+
+    ! Locals
+    real(kind=${kind}$) :: r
+
+    ! Random number generation and truncation
+    call random_number(r)
+    if (max_val < min_val) then
+      x = min_val
+    else
+      x = min_val + (max_val-min_val)*r
+    end if
+  end subroutine
+  #:endfor
+
+  ! Size-bounded random number generation
+  ! =====================================
+
+  ! These functions generate values whose magnitudes are bounded by
+  ! the current value size, which changes (usually grows) over time
+
+  ! Routines for various integer kinds
+  #:for kind in ["int8", "int16", "int32", "int64"]
+  impure elemental subroutine arbitrary_${kind}$(x, min_val, max_val)
+    ! Parameters
+    integer(kind=${kind}$), intent(out) :: x
+    integer(kind=${kind}$), intent(in), optional :: min_val, max_val
+
+    ! Locals
+    integer(kind=int64) :: min_val_use, max_val_use
+    integer(kind=${kind}$) :: min_bound, max_bound
+
+    ! Compute representable range for given kind
+    max_bound = huge(x)
+    min_bound = -max_bound - 1
+
+    ! Account for missing min_val
+    if (present(min_val)) then
+      min_val_use = int(min_val, kind=int64)
+    else
+      min_val_use = int(min_bound, kind=int64)
+    end if
+
+    ! Account for missing max_val
+    if (present(max_val)) then
+      max_val_use = int(max_val, kind=int64)
+    else
+      max_val_use = int(max_bound, kind=int64)
+    end if
+
+    ! Constrain the range by the size
+    min_val_use = max(min_val_use, -get_int_size()/2)
+    if (min_val_use + get_int_size() > min_val_use) then
+      max_val_use = min(max_val_use, min_val_use + get_int_size())
+    end if
+
+    call between(x, int(min_val_use, kind=${kind}$), &
+                    int(max_val_use, kind=${kind}$))
+  end subroutine
+  #:endfor
+
+  ! Routines for various real kinds
+  #:for kind in ["real32", "real64", "real128"]
+  impure elemental subroutine arbitrary_${kind}$(x, min_val, max_val)
+    ! Parameters
+    real(kind=${kind}$), intent(out) :: x
+    real(kind=${kind}$), intent(in), optional :: min_val, max_val
+
+    ! Locals
+    real(kind=${kind}$) :: min_val_use, max_val_use
+
+    ! Account for missing min_val
+    if (present(min_val)) then
+      min_val_use = max(min_val, real(-get_real_size(), kind=${kind}$))
+    else
+      min_val_use = -real(get_real_size(), kind=${kind}$)
+    end if
+
+    ! Account for missing max_val
+    if (present(max_val)) then
+      max_val_use = min(max_val, &
+                        min_val_use + real(get_real_size(), kind=${kind}$))
+    else
+      max_val_use = min_val_use + real(get_real_size(), kind=${kind}$)
+    end if
+
+    call between(x, min_val_use, max_val_use)
+  end subroutine
+  #:endfor
+
+  ! Arbitrary character strings
+  impure elemental subroutine arbitrary_char(x, domain)
+    ! Parameters
+    character(len=*), intent(out) :: x
+    character(len=*), intent(in), optional :: domain
+    character :: min
+
+    ! Locals
+    real :: chance
+    integer :: i, r
+    character(:), allocatable :: wide_domain, narrow_domain
+
+    ! Character domain from which to draw characters
+    if (present(domain)) then
+      wide_domain = domain
+      narrow_domain = domain
+    else
+      allocate(character(256) :: wide_domain)
+      do i = 1, 256
+        wide_domain(i:i) = achar(i-1)
+      end do
+      narrow_domain = "ab, "
+    end if
+
+    ! Occasionally, pick from the narrow domain
+    call arbitrary(chance, min_val=0.0, max_val=1.0)
+    if (chance < 0.5) then
+      do i = 1, len(x)
+        call arbitrary(r, min_val=1, max_val=len(narrow_domain))
+        x(i:i) = narrow_domain(r:r)
+      end do
+    else
+      do i = 1, len(x)
+        call arbitrary(r, min_val=1, max_val=len(wide_domain))
+        x(i:i) = wide_domain(r:r)
+      end do
+    end if
+  end subroutine
+
+  ! Arbitrary booleans
+  impure elemental subroutine arbitrary_logical(x)
+    ! Parameters
+    logical, intent(out) :: x
+
+    ! Locals
+    real :: r
+
+    call between(r, min_val=0.0, max_val=1.0)
+    x = r < 0.5
+  end subroutine
+
+  ! Arbitrary routines for complex numbers of various kinds
+  #:for kind in ["real32", "real64", "real128"]
+  impure elemental subroutine arbitrary_complex_${kind}$(x, min_val, max_val)
+    complex(kind=${kind}$), intent(out) :: x
+    complex(kind=${kind}$), intent(in), optional :: min_val, max_val
+    real(kind=${kind}$) :: re, im
+    if (present(min_val) .and. present(max_val)) then
+      call arbitrary(re, min_val=real(min_val), max_val=real(max_val))
+      call arbitrary(im, min_val=aimag(min_val), max_val=aimag(max_val))
+    else if (present(min_val)) then
+      call arbitrary(re, min_val=real(min_val))
+      call arbitrary(im, min_val=aimag(min_val))
+    else if (present(max_val)) then
+      call arbitrary(re, max_val=real(max_val))
+      call arbitrary(im, max_val=aimag(max_val))
+    else
+      call arbitrary(re)
+      call arbitrary(im)
+    end if
+    x = cmplx(re, im)
+  end subroutine
+  #:endfor
+
+  ! Routine for generating arbitrary array shapes
+  subroutine arbitrary_shape(sh)
+    integer, intent(out) :: sh(:)
+    integer :: i, sz, rank, zero_sized_dim
+
+    ! Limit the size of each dimension based on the number of dimensions
+    ! (to avoid size explosion for high dimensional arrays)
+    rank = size(sh)
+    if (rank > 0) then
+      sz = max(2.0, get_int_size() ** (1.0/rank))
+    else
+      return
+    end if
+
+    ! Only allow the one dimension to be 0-sized
+    ! (to avoid too many empty arrays)
+    call between(zero_sized_dim, min_val=1, max_val=rank)
+
+    ! Generate each dimension
+    do i = 1, rank
+      if (i == zero_sized_dim) then
+        call between(sh(i), min_val=0, max_val=sz)
+      else
+        call between(sh(i), min_val=1, max_val=sz)
+      end if
+    end do
+  end subroutine
+
+  ! Subroutine for allocating and generating arbitrary strings
+  subroutine arbitrary_str(str, domain, min_len, max_len)
+    character(:), allocatable, intent(out) :: str
+    character(*), intent(in), optional :: domain
+    integer, intent(in), optional :: min_len, max_len
+    integer :: n
+    real :: chance
+
+    ! Determine length, and allocate
+    if (.not. present(min_len) .and. .not. present(max_len)) then
+      ! Ocassionally generated small strings
+      call between(chance, 0.0, 1.0)
+      if (chance < 0.5) then
+        call arbitrary(n, min_val=0, max_val=3)
+      else
+        call arbitrary(n, min_val=0)
+      end if
+    else if (.not. present(min_len)) then
+      call arbitrary(n, min_val=0, max_val=max_len)
+    else
+      call arbitrary(n, min_val=min_len, max_val=max_len)
+    end if
+    allocate(character(n) :: str)
+
+    ! Populate string
+    if (present(domain)) then
+      call arbitrary_char(str, domain=domain)
+    else
+      call arbitrary_char(str)
+    end if
+  end subroutine
+
+  ! Showing generated values / counterexamples
+  ! ==========================================
+
+  ! Show routines for various integer kinds
+  #:for kind in ["int8", "int16", "int32", "int64"]
+  elemental function show_${kind}$(x) result(txt)
+    integer(kind=${kind}$), intent(in) :: x
+    type(text_t) :: txt
+    character(64) :: tmp
+    write(tmp, "(i0)") x
+    txt = text(trim(tmp))
+  end function
+  #:endfor
+
+  ! Show routines for various real kinds
+  #:for kind in ["real32", "real64", "real128"]
+  elemental function show_${kind}$(x) result(txt)
+    real(kind=${kind}$), intent(in) :: x
+    type(text_t) :: txt
+    character(512) :: tmp
+    integer :: last
+    write(tmp, "(f0.255)") x
+    txt = text(trim(tmp))
+    last = txt%n
+    do while (last > 0 .and. txt%contents(last:last) == "0")
+      last = last - 1
+    end do
+    txt%n = last
+  end function
+  #:endfor
+
+  ! Show routines for various complex kinds
+  #:for kind in ["real32", "real64", "real128"]
+  elemental function show_complex_${kind}$(x) result(txt)
+    complex(kind=${kind}$), intent(in) :: x
+    type(text_t) :: txt
+    call txt%append("cmplx(")
+    call txt%append(show(real(x)))
+    call txt%append(",")
+    call txt%append(show(aimag(x)))
+    call txt%append(")")
+  end function
+  #:endfor
+
+  ! Show a character string
+  elemental function show_str(x) result(txt)
+    ! Parameters
+    character(len=*), intent(in) :: x
+    type(text_t) :: txt
+
+    ! Locals
+    integer :: i, code
+    logical :: in_quote
+
+    ! Are we currently inside quotation marks?
+    in_quote = .false.
+
+    ! Handle empty string
+    if (len(x) == 0) then
+      txt = text('""')
+      return
+    end if
+
+    ! Render string
+    call txt%init(initial_capacity=1024)
+    do i = 1, len(x)
+      code = ichar(x(i:i))
+      if (code >= 32 .and. code <= 126 .and. code /= ichar('"')) then
+        ! Printable characters are appended (adding quotation marks if needed)
+        if (.not. in_quote) then
+          in_quote = .true.
+          call txt%append('"')
+        end if
+        call txt%append(x(i:i))
+      else
+        ! Non-printable characters are converted to achar() calls
+        if (in_quote) then
+          in_quote = .false.
+          call txt%append('" // ')
+        end if
+        call txt%append('achar(')
+        call txt%append(show(code))
+        call txt%append(')')
+        if (i < len(x)) then
+          call txt%append(' // ')
+        end if
+      end if
+    end do
+    if (in_quote) then
+      call txt%append('"')
+    end if
+  end function
+
+  ! Show a boolean
+  elemental function show_logical(x) result(txt)
+    logical, intent(in) :: x
+    type(text_t) :: txt
+    if (x) then
+      call txt%append(".true.")
+    else
+      call txt%append(".false.")
+    end if
+  end function
+
+  ! Render a 1D array of texts as text
+  recursive function show_text_array(arr, shp) result (txt)
+    ! Parameters
+    type(text_t), intent(in) :: arr(:)
+    integer, intent(in) :: shp(:)
+    type(text_t) :: txt
+
+    ! Locals
+    integer :: i, last
+
+    if (size(arr) == 0) then
+      ! Handle empty array
+      call txt%append("[]")
+    else if (size(shp) == 0) then
+      ! Handle scalar
+      call txt%append(arr(1))
+    else
+      ! Handle non-empty array
+      call txt%init(initial_capacity=1024)
+      call txt%append("[")
+      do i = 1, size(arr)
+        call txt%append(arr(i))
+        if (i == size(arr)) then
+          call txt%append("]")
+        else
+          call txt%append(",")
+        end if
+      end do
+    end if
+
+    ! Insert shape info it it is not implied
+    if (size(shp) >= 2) then
+      call txt%append(",")
+      call txt%append(@{show_array(shp)}@)
+      call txt%append(")")
+      txt = text("reshape(") // txt
+    end if
+  end function
+
+  ! Near equality
+  ! =============
+
+  ! Routines for comparing real values of various kinds
+  ! (Following numpy's allclose() function)
+  #:for kind in ["real32", "real64", "real128"]
+  pure elemental function near_equal_${kind}$(a,b,rtol,atol,equal_nan) &
+                          result(ok)
+    ! Parameters
+    real(kind=${kind}$), intent(in) :: a, b
+    real(kind=${kind}$), intent(in), optional :: rtol, atol
+    logical, intent(in), optional :: equal_nan
+    logical :: ok
+
+    ! Locals
+    real(kind=${kind}$) :: rtol_use, atol_use
+    logical :: nan_ok
+
+    if (present(rtol)) then; rtol_use = rtol; else; rtol_use = 1e-5; end if
+    if (present(atol)) then; atol_use = atol; else; atol_use = 1e-8; end if
+    if (present(equal_nan)) then; nan_ok = equal_nan
+                            else; nan_ok = .false.; end if
+    ok = (nan_ok .and. isnan(a) .and. isnan(b)) .or. &
+           abs(a-b) <= (atol_use + rtol_use * abs(b))
+  end function
+  #:endfor
+
+  ! Checking properties
+  ! ===================
+
+  ! Top-level routine for checking properties
+  subroutine check(prop, int_size, real_size, num_tests, verbose, &
+                   silent, passed, name)
+    ! Parameters
+    procedure(property_fun_t) :: prop
+    procedure(int_size_fun_t), optional :: int_size
+    procedure(int_size_fun_t), optional :: real_size
+    integer, intent(in), optional :: num_tests
+    logical, intent(in), optional :: verbose
+    logical, intent(in), optional :: silent
+    logical, intent(out), optional :: passed
+    character(*), intent(in), optional :: name
+
+    ! Locals
+    integer :: i, j, num_tests_use, num_discarded
+    real :: percent_classified
+    logical :: ok
+    character(32) :: classifier_name
+
+    call state%init()
+    num_discarded = 0
+
+    ! Print property name
+    if (present(name) .and. .not. (present(silent) .and. silent)) then
+      write (*, "(a)") "Testing " // name // ":"
+    end if
+
+    ! Handle 'num_tests' option
+    if (present(num_tests)) then
+      num_tests_use = num_tests
+    else
+      num_tests_use = 100
+    end if
+
+    i = 1
+    do while (i <= num_tests_use)
+      call state%reset()
+
+      ! Handle 'verbose' option
+      if (present(verbose) .and. verbose) then
+        state%verbose_mode = .true.
+        if (.not. (present(silent) .and. silent)) then
+          write(*, "(a,i0,a)") "Test ", i, ":"
+        end if
+      end if
+
+      ! Compute sizes
+      if (present(int_size)) then
+        state%int_size = int_size(i-1)
+      else
+        state%int_size = int_size_default(i-1)
+      end if
+      if (present(real_size)) then
+        state%real_size = real_size(i-1)
+      else
+        state%real_size = real_size_default(i-1)
+      end if
+
+      ! Run property
+      ok = prop()
+
+      ! Discard test?
+      if (state%discard_test) then
+        num_discarded = num_discarded + 1
+      else
+        i = i + 1
+
+        ! Report counterexample
+        if (.not. ok) then
+          if (.not. (present(silent) .and. silent)) then
+            write(*, "(a)") "Counterexample:"
+            do j = 1, state%num_quantified_vars
+              write(*, "(a,' = ',a)") state%quantified_vars(j)%name, &
+                                      state%quantified_vars(j)%str
+            end do
+          end if
+          if (present(passed)) then
+            passed = .false.
+          end if
+          return
+        end if
+      end if
+
+      if (state%verbose_mode) then
+        if (state%discard_test) then
+          write(*, "(a)") "Discarded"
+        end if
+        write(*, "()")
+      end if
+    end do
+
+    ! Final output
+    if (.not. (present(silent) .and. silent)) then
+      if (num_discarded > 0) then
+        write(*, "(a,i0,a,a,i0,a)") &
+          "OK: passed ", num_tests_use, " tests ", &
+          "(", num_discarded, " discarded)"
+      else
+        write(*, "(a,i0,a)") "OK: passed ", num_tests_use, " tests"
+      end if
+
+      ! Display histogram, if non-empty
+      if (state%num_histogram_entries > 0) then
+        ! Display
+        do i = 1, state%num_histogram_entries
+          classifier_name = state%histogram(i)%name
+          percent_classified = real(state%histogram(i)%count) / &
+                               real(num_tests_use)
+          write(*, "(a32,f0.1,'%')") classifier_name, 100.0*percent_classified
+        end do
+      end if
+    end if
+
+    if (present(passed)) then
+      passed = .true.
+    end if
+  end subroutine
+
+end module

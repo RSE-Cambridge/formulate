@@ -1,0 +1,59 @@
+! SPDX-License-Identifier: MIT
+
+#:include "formulate_macros.fypp"
+
+program derived_type
+  use formulate
+
+  implicit none
+
+  ! A simple derived type for integer pairs
+  type :: pair_t
+    integer :: x, y
+  end type
+
+  ! Extend Formulate's 'show' interface
+  interface show
+    procedure :: show_pair
+  end interface
+
+  ! Extend Formulate's 'arbitrary' interface
+  interface arbitrary
+    procedure :: arbitrary_pair
+  end interface
+
+  ! Check a property about sorted pairs
+  @:check(prop_sort)
+
+contains
+
+  ! Function for showing pairs
+  elemental function show_pair(p) result(txt)
+    type(pair_t), intent(in) :: p
+    type(text_t) :: txt
+    txt = "(" // show(p%x) // "," // show(p%y) // ")"
+  end function
+
+  ! Function for generating arbitrary pairs
+  impure elemental subroutine arbitrary_pair(p)
+    type(pair_t), intent(out) :: p
+    call arbitrary(p%x)
+    call arbitrary(p%y)
+  end subroutine
+
+  ! Function to sort a pair
+  function sort(p) result (q)
+    type(pair_t), intent(in) :: p
+    type(pair_t) :: q
+    q%x = min(p%x, p%y)
+    q%y = max(p%x, p%y)
+  end function
+
+  ! Property stating that sorted pairs are correctly ordered
+  logical function prop_sort()
+    type(pair_t) :: p, q
+    @:for_all(p)
+    q = sort(p)
+    prop_sort = q%x <= q%y
+  end function
+end program

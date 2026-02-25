@@ -1,0 +1,23 @@
+#:include "formulate_macros.fypp"
+
+program rle_props
+  use rle_lib
+  use formulate
+
+  implicit none
+
+  @:check(prop_encode_decode)
+
+contains
+
+  ! Property that decode is the inverse of encode
+  ! Use a classifier to see how many compressible strings are generated
+  logical function prop_encode_decode()
+    character(:), allocatable :: str
+    @:for_all_string(str)
+    prop_encode_decode = decode(encode(str)) == str
+    call classify("empty", len(str) == 0)
+    call classify("compressible", size(encode(str)) < len(str))
+  end function
+
+end program
