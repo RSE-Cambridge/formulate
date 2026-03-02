@@ -401,6 +401,9 @@ end function
 > Other macro variants for unallocated arrays include:
 >
 >   * `for_all_custom_array()`, to support custom generators;
+>   * `for_all_shaped()`, to support a given array shape;
+>   * `for_all_custom_shaped()`, to support custom generators and a
+>      given array shape;
 >   * `arbitrary_array()`, for silent quantification;
 >   * `arbitrary_custom_array()`, for silent quantification and 
 >     custom generation.
@@ -710,7 +713,7 @@ a hash map value.
 
 FTL's hash map provides the following main methods for creating or mutating has maps:
 
-  * `map%new(num_buckes)`;
+  * `map%new(num_buckets)`;
   * `map%set(key, value)`;
   * `map%erase(key)`;
   * `map%copy()`;

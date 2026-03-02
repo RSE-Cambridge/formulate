@@ -99,6 +99,18 @@ $:for_all_custom(x, "arbitrary", *args, **kwargs)
 $:for_all_custom_array(rank_n, x, "arbitrary", *args, **kwargs)
 #:enddef
 
+#! Macro to quantify over 'rank_n' arrays 'x' of a given shape 's' using
+#! a custom generator 'gen'
+#:def for_all_custom_shaped(rank_n, s, x, gen, *args, **kwargs)
+  @:allocate(${rank_n}$, ${x}$, ${s}$)
+  $:for_all_custom(x, gen, *args, **kwargs)
+#:enddef
+
+#! Macro to quantify over 'rank_n' arrays 'x' of a given shape 's'
+#:def for_all_shaped(rank_n, s, x, *args, **kwargs)
+  $:for_all_custom_shaped(rank_n, s, x, "arbitrary", *args, **kwargs)
+#:enddef
+
 #! Quantifier for unallocated strings
 #:def for_all_string(x, *args, **kwargs)
 $:for_all_custom(x, "arbitrary_str", *args, **kwargs)

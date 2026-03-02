@@ -104,10 +104,9 @@ contains
     integer, allocatable :: a(:,:), b(:,:), c(:,:)
     integer :: n
     call arbitrary(n, min_val=0)
-    allocate(a(n,n), b(n,n), c(n,n))
-    @:for_all(a)
-    @:for_all(b)
-    @:for_all(c)
+    @:for_all_shaped(rank_2, [n, n], a)
+    @:for_all_shaped(rank_2, [n, n], b)
+    @:for_all_shaped(rank_2, [n, n], c)
     prop_matmul_assoc = all(matmul(a, matmul(b, c)) == matmul(matmul(a, b), c))
   end function
 
