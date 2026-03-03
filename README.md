@@ -540,7 +540,7 @@ end interface
 elemental function show_pair(p) result(txt)
   type(pair_t), intent(in) :: p
   type(text_t) :: txt
-  txt = "(" // show(p%x) // "," // show(p%y) // ")"
+  txt = "pair_t(" // show(p%x) // "," // show(p%y) // ")"
 end function
 ```
 
