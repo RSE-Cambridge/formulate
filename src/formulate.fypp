@@ -150,7 +150,8 @@ module formulate
   ! Test closeness of real values
   interface near_equal
     procedure :: near_equal_real32, near_equal_real64, &
-                 near_equal_real128
+                 near_equal_real128, near_equal_int8, &
+                 near_equal_int16, near_equal_int32, near_equal_int64
   end interface
 
   ! Interface
@@ -860,6 +861,15 @@ contains
                             else; nan_ok = .false.; end if
     ok = (nan_ok .and. isnan(a) .and. isnan(b)) .or. &
            abs(a-b) <= (atol_use + rtol_use * abs(b))
+  end function
+  #:endfor
+
+  ! Routines for comparing integer values of various kinds
+  #:for kind in ["int8", "int16", "int32", "int64"]
+  pure elemental function near_equal_${kind}$(a,b) result(ok)
+    integer(kind=${kind}$), intent(in) :: a, b
+    logical :: ok
+    ok = a == b
   end function
   #:endfor
 

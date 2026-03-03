@@ -12,6 +12,11 @@
 $:','.join(args+list(f'{k}={v}' for k,v in kwargs.items()))
 #:enddef
 
+#! Macro to turn a rank into a string of dimensions, e.g. "3" -> ":,:,:"
+#:def rank_dims(n)
+$:",".join([":" for i in range(int(n))])
+#:enddef
+
 #! Checker macro
 #! =============
 
@@ -114,6 +119,20 @@ $:for_all_custom_array(rank_n, x, "arbitrary", *args, **kwargs)
 #! Quantifier for unallocated strings
 #:def for_all_string(x, *args, **kwargs)
 $:for_all_custom(x, "arbitrary_str", *args, **kwargs)
+#:enddef
+
+#! Array equality
+#! ==============
+
+#! Macro to compare arrays for equality
+#:def array_equal(a, b)
+  (all(${a}$ == ${b}$) .and. all(shape(${a}$) == shape(${b}$)))
+#:enddef
+
+#! Macro to compare arrays for near equality
+#:def near_equal(a, b, *args, **kwargs)
+  (all(near_equal(${expand_args(a, b, *args, **kwargs)}$)) .and. &
+   all(shape(${a}$) == shape(${b}$)))
 #:enddef
 
 #:endif
