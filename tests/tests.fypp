@@ -1,0 +1,40 @@
+! SPDX-License-Identifier: MIT
+
+#:include "formulate_macros.fypp"
+
+program tests
+  use formulate
+  use iso_fortran_env
+
+  implicit none
+
+  #:for kind in ["int8", "int16", "int32", "int64",&
+                &"real32", "real64", "real128"]
+    @:check(prop_for_all_min_max_${kind}$, num_tests=100000)
+  #:endfor
+
+contains
+
+  ! Check that 'min_val' and 'max_val' arguments to 'for_all()' are working
+  #:for kind in ["int8", "int16", "int32", "int64"]
+    logical function prop_for_all_min_max_${kind}$()
+      integer(${kind}$) :: lower, upper, x
+      @:for_all(lower)
+      @:for_all(upper, min_val=lower)
+      @:for_all(x, min_val=lower, max_val=upper)
+      prop_for_all_min_max_${kind}$ = x >= lower .and. x <= upper
+    end function
+  #:endfor
+
+  ! As above, but for reals instead of integers
+  #:for kind in ["real32", "real64", "real128"]
+    logical function prop_for_all_min_max_${kind}$()
+      real(${kind}$) :: lower, upper, x
+      @:for_all(lower)
+      @:for_all(upper, min_val=lower)
+      @:for_all(x, min_val=lower, max_val=upper)
+      prop_for_all_min_max_${kind}$ = &
+        implies(lower /= upper, x >= lower .and. x < upper)
+    end function
+  #:endfor
+end program
