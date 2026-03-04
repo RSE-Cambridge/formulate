@@ -262,6 +262,25 @@ end subroutine
 > @:for_all_custom(x, arbitrary, ...)
 > ```
 
+The above examples quantify over values in a way that is biased towards trying
+smaller values first, with the size gradually increasing over time. To
+quanitify over values uniformly, the `for_all_uniform()` macro can be used:
+
+```f90
+integer :: x
+@:for_all_uniform(x, min_val=1, max_val=10)
+```
+
+The `min_val` and `max_val` arguments are mandatory and this macro is limited
+to `integer` and `real` types.  Underneath, this macro calls Formulate's
+`between()` subroutine. A related macro is `for_all_in()`, which uniformly
+picks an arbitrary element from a given array.
+
+```f90
+integer :: x
+@:for_all_in(x, [1, 2, 4, 8])
+```
+
 ### 5. Quantifying over allocated arrays
 
 In the above examples, `for_all()` was used to quantify over both `integer` and

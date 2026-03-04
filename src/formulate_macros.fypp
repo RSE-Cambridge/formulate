@@ -93,6 +93,12 @@ $:arbitrary_custom_array(rank_n, x, "arbitrary", *args, **kwargs)
 $:for_all_custom(x, "arbitrary", *args, **kwargs)
 #:enddef
 
+#! Macro to quantify uniformly over 'x' (for integers and reals only),
+#! i.e. not biased towards generating small values first.
+#:def for_all_uniform(x, min_val, max_val)
+$:for_all_custom(x, "between", min_val, max_val)
+#:enddef
+
 #! Macro to quantify over 'rank_n' arrays 'x' using a custom generator 'gen'
 #:def for_all_custom_array(rank_n, x, gen, *args, **kwargs)
   @:arbitrary_allocate(${rank_n}$, ${x}$)
@@ -119,6 +125,18 @@ $:for_all_custom_array(rank_n, x, "arbitrary", *args, **kwargs)
 #! Quantifier for unallocated strings
 #:def for_all_string(x, *args, **kwargs)
 $:for_all_custom(x, "arbitrary_str", *args, **kwargs)
+#:enddef
+
+#! Macro to quantify uniformly over a given domain
+#:def for_all_in(x, domain)
+  block
+    integer :: i__
+    associate (dom__ => ${domain}$)
+      call between(i__, min_val=lbound(dom__,1), max_val=ubound(dom__,1))
+      ${x}$ = dom__(i__)
+      @:record(${x}$)
+    end associate
+  end block
 #:enddef
 
 #! Array equality
