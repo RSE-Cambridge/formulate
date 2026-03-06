@@ -281,6 +281,8 @@ integer :: x
 @:for_all_in(x, [1, 2, 4, 8])
 ```
 
+The silent variant of the `for_all_in()` macro is the `pick()` macro.
+
 ### 5. Quantifying over allocated arrays
 
 In the above examples, `for_all()` was used to quantify over both `integer` and

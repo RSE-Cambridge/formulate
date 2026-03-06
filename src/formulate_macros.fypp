@@ -79,6 +79,17 @@ end associate
 $:arbitrary_custom_array(rank_n, x, "arbitrary", *args, **kwargs)
 #:enddef
 
+#! Macro to pick an array element uniformly at random
+#:def pick(x, domain)
+  block
+    integer :: i__
+    associate (dom__ => ${domain}$)
+      call between(i__, min_val=lbound(dom__,1), max_val=ubound(dom__,1))
+      ${x}$ = dom__(i__)
+    end associate
+  end block
+#:enddef
+
 #! Universal quantifiers
 #! =====================
 
@@ -129,14 +140,8 @@ $:for_all_custom(x, "arbitrary_str", *args, **kwargs)
 
 #! Macro to quantify uniformly over a given domain
 #:def for_all_in(x, domain)
-  block
-    integer :: i__
-    associate (dom__ => ${domain}$)
-      call between(i__, min_val=lbound(dom__,1), max_val=ubound(dom__,1))
-      ${x}$ = dom__(i__)
-      @:record(${x}$)
-    end associate
-  end block
+  $:pick(x, domain)
+  $:record(x)
 #:enddef
 
 #! Array equality
