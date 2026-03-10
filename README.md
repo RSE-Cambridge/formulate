@@ -263,7 +263,7 @@ end subroutine
 > ```
 
 Another useful `for_all()` variant for restricting the domain is
-`for_all_in()`, which which uniformly picks an arbitrary element from a given
+`for_all_in()`, which uniformly picks an arbitrary element from a given
 array.
 
 ```f90
