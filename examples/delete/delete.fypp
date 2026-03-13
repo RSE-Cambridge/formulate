@@ -1,0 +1,44 @@
+#:include "formulate_macros.fypp"
+
+program delete_props
+  use formulate
+  @:check(prop_delete_wrong)
+  @:check(prop_delete_right)
+
+contains
+
+  ! Delete first occurrence of x from xs
+  function delete(x, xs) result (ys)
+    integer, intent(in) :: x, xs(:)
+    integer, allocatable :: ys(:)
+    integer :: i
+    do i = 1, size(xs)
+      if (xs(i) == x) then
+        allocate(ys(size(xs)-1))
+        ys(1:i-1) = xs(1:i-1)
+        ys(i:) = xs(i+1:)
+        return
+      end if
+    end do
+    ys = xs
+  end function
+
+  ! A property that looks right but isn't
+  logical function prop_delete_wrong()
+    integer :: x
+    integer, allocatable :: xs(:)
+    @:for_all(x)
+    @:for_all_array(rank_1, xs)
+    prop_delete_wrong = .not. any(delete(x, xs) == x)
+  end function
+
+  ! A property that actually holds
+  logical function prop_delete_right()
+    integer :: x
+    integer, allocatable :: xs(:)
+    @:for_all(x)
+    @:for_all_array(rank_1, xs)
+    prop_delete_right = &
+      implies(count(xs == x) <= 1, .not. any(delete(x, xs) == x))
+  end function
+end program
