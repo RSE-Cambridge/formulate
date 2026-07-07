@@ -487,7 +487,7 @@ logical function prop_index()
   @:for_all_string(str)
   @:for_all_string(substr)
   i = index(str, substr)
-  prop_index = implies(i /= 0, str(i:i+len(substr)-1) == substr)
+  prop_index = i /= 0 .implies. str(i:i+len(substr)-1) == substr
   call classify("Empty", len(substr) == 0)
   call classify("Found", len(substr) > 0 .and. i > 0)
 end function
@@ -781,7 +781,6 @@ logical function prop_consistent()
 end function
 ```
 
-Formulate did not find any counterexamples to this property. The FTL hash map
-implementation is looking good! The full source code for this example can be
-found in
+Formulate did not find any counterexamples to this property.
+The full source code for this example can be found in
 [ftl_hashmap_test.fypp](examples/ftl/ftl_hashmap_test.fypp).

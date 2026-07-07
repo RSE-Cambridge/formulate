@@ -119,6 +119,6 @@ contains
      i = index(str, substr)
      call classify("Empty", len(substr) == 0)
      call classify("Found", len(substr) > 0 .and. i > 0)
-     prop_index = implies(i /= 0, str(i:i+len(substr)-1) == substr)
+     prop_index = i /= 0 .implies. str(i:i+len(substr)-1) == substr
   end function
 end program

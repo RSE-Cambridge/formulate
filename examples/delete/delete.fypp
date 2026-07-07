@@ -39,6 +39,6 @@ contains
     @:for_all(x)
     @:for_all_array(rank_1, xs)
     prop_delete_right = &
-      implies(count(xs == x) <= 1, .not. any(delete(x, xs) == x))
+      count(xs == x) <= 1 .implies. .not. any(delete(x, xs) == x)
   end function
 end program

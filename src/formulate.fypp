@@ -154,6 +154,11 @@ module formulate
                  near_equal_int16, near_equal_int32, near_equal_int64
   end interface
 
+  ! Logical implication operator
+  interface operator(.implies.)
+    procedure implies
+  end interface
+
   ! Interface
   ! =========
 
@@ -161,7 +166,7 @@ module formulate
   public :: get_int_size
   public :: get_real_size
   public :: record_val
-  public :: implies
+  public :: implies, operator(.implies.)
   public :: operator(//)
   public :: assignment(=)
   public :: near_equal
